@@ -8,84 +8,112 @@
 #include <net/pfil.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
+#include <net/if.h>
+#include <net/ethernet.h>
 
 static unsigned long dropped_packets = 0;
 static unsigned long dropped_bytes = 0;
 
-static struct pfil_head *pfh_inet;
-static pfil_hook_t *pfh_inet_hook;
+static pfil_hook_t pfh_inet_hook = NULL;
 
 /* Hook function */
 static int
-pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, struct inpcb *inp)
+pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *ulp)
 {
     struct mbuf *m = *mp;
     struct ip *ip_hdr;
     struct tcphdr *tcp_hdr;
     char *payload;
     int ip_hlen, tcp_hlen, payload_len;
+    char buf[128];
+    int tocopy;
 
-    if (m == NULL) return 0;
+    if (m == NULL) 
+        return (PF_PASS);
+
+    /* Check if it's an IP packet */
+    if (mtod(m, struct ether_header *)->ether_type != htons(ETHERTYPE_IP))
+        return (PF_PASS);
 
     ip_hdr = mtod(m, struct ip *);
-    if (ip_hdr->ip_p != IPPROTO_TCP) return 0;
+    
+    /* Check if it's TCP */
+    if (ip_hdr->ip_p != IPPROTO_TCP) 
+        return (PF_PASS);
 
     ip_hlen = ip_hdr->ip_hl << 2;
+    
+    /* Ensure we have enough data for TCP header */
+    if (m->m_len < ip_hlen + sizeof(struct tcphdr)) {
+        m = m_pullup(m, ip_hlen + sizeof(struct tcphdr));
+        if (m == NULL)
+            return (PF_PASS);
+        *mp = m;
+        ip_hdr = mtod(m, struct ip *);
+    }
+
     tcp_hdr = (struct tcphdr *)((caddr_t)ip_hdr + ip_hlen);
+    
+    /* Check if it's HTTP (port 80) */
+    if (ntohs(tcp_hdr->th_dport) != 80)
+        return (PF_PASS);
+
     tcp_hlen = tcp_hdr->th_off << 2;
-
-    if (ntohs(tcp_hdr->th_dport) != 80) return 0;
-
     payload_len = ntohs(ip_hdr->ip_len) - (ip_hlen + tcp_hlen);
-    if (payload_len <= 0) return 0;
+    
+    if (payload_len <= 0)
+        return (PF_PASS);
 
-    payload = (char *)tcp_hdr + tcp_hlen;
+    /* Copy payload for inspection */
+    tocopy = min(sizeof(buf) - 1, payload_len);
+    m_copydata(m, ip_hlen + tcp_hlen, tocopy, buf);
+    buf[tocopy] = '\0';
 
-    if (payload && (payload_len > 0) &&
-        (strnstr(payload, "Host: blocked.com", payload_len) != NULL)) {
+    /* Check for blocked.com in Host header */
+    if (strstr(buf, "Host: blocked.com") != NULL ||
+        strstr(buf, "Host: blocked.com\r\n") != NULL) {
         dropped_packets++;
-        dropped_bytes += payload_len;
-        printf("[pf_blockedcom] Dropped HTTP packet (count=%lu, bytes=%lu)\n",
+        dropped_bytes += m->m_pkthdr.len;
+        printf("[pf_blockedcom] Dropped HTTP packet to blocked.com (count=%lu, bytes=%lu)\n",
                dropped_packets, dropped_bytes);
         m_freem(m);
         *mp = NULL;
-        return EPERM;
+        return (PF_DROP);
     }
 
-    return 0;
+    return (PF_PASS);
 }
 
 static int
 load(module_t mod, int cmd, void *arg)
 {
     int error = 0;
+    struct pfil_hook_args pha;
 
     switch (cmd) {
     case MOD_LOAD:
-        pfh_inet = pfil_head_get(PFIL_TYPE_AF, AF_INET);
-        if (pfh_inet == NULL)
-            return ENOENT;
-
-        struct pfil_hook_args pha = {
-            .pha_type = PFIL_TYPE_AF,
-            .pha_func = pf_http_filter,
-            .pha_arg  = NULL,
-            .pha_flags = PFIL_IN,
-            .pha_head = pfh_inet,
-            .pha_name = "pf_blockedcom"
-        };
-
+        memset(&pha, 0, sizeof(pha));
+        pha.pha_func = pf_http_filter;
+        pha.pha_flags = PFIL_IN | PFIL_WAITOK;
+        pha.pha_name = "pf_blockedcom";
+        pha.pha_type = PFIL_TYPE_AF;
+        pha.pha_af = AF_INET;
+        
         pfh_inet_hook = pfil_add_hook(&pha);
-        if (pfh_inet_hook == NULL)
-            return ENOMEM;
+        if (pfh_inet_hook == NULL) {
+            printf("[pf_blockedcom] Failed to add hook\n");
+            return (ENOMEM);
+        }
 
         printf("[pf_blockedcom] Module loaded\n");
         break;
 
     case MOD_UNLOAD:
-        if (pfh_inet_hook)
+        if (pfh_inet_hook != NULL)
             pfil_remove_hook(pfh_inet_hook);
-        printf("[pf_blockedcom] Module unloaded\n");
+        
+        printf("[pf_blockedcom] Module unloaded. Total dropped: %lu packets, %lu bytes\n",
+               dropped_packets, dropped_bytes);
         break;
 
     default:
