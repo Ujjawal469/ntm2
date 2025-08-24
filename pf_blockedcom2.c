@@ -10,15 +10,17 @@
 #include <sys/mbuf.h>
 #include <net/if.h>
 #include <net/ethernet.h>
+#include <sys/lock.h>
+#include <sys/rwlock.h>
 
 static unsigned long dropped_packets = 0;
 static unsigned long dropped_bytes = 0;
 
-static pfil_hook_t pfh_inet_hook = NULL;
+static struct pfil_hook *pfh_inet_hook = NULL;
 
 /* Hook function with correct signature */
 static int
-pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *ulp)
+pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *inp)
 {
     struct mbuf *m = *mp;
     struct ip *ip_hdr;
@@ -94,22 +96,24 @@ load(module_t mod, int cmd, void *arg)
 
     switch (cmd) {
     case MOD_LOAD:
-        /* Use the new pfil API */
-        struct pfil_hook_args pha;
-        bzero(&pha, sizeof(pha));
-        
-        pha.pa_version = PFIL_VERSION;
-        pha.pa_flags = PFIL_IN;
-        pha.pa_type = PFIL_TYPE_IP4;
-        pha.pa_func = pf_http_filter;
-        
-        pfh_inet_hook = pfil_add_hook_args(&pha);
-        if (pfh_inet_hook == NULL) {
-            printf("[pf_blockedcom] Failed to add hook\n");
-            return (ENOMEM);
-        }
+        {
+            struct pfil_hook_args pha;
+            
+            /* Initialize the hook arguments structure */
+            bzero(&pha, sizeof(pha));
+            pha.pa_version = PFIL_VERSION;
+            pha.pa_flags = PFIL_IN;
+            pha.pa_type = PFIL_TYPE_IP4;
+            pha.pa_func = (pfil_func_t)pf_http_filter;
+            
+            pfh_inet_hook = pfil_add_hook(&pha);
+            if (pfh_inet_hook == NULL) {
+                printf("[pf_blockedcom] Failed to add hook\n");
+                return (ENOMEM);
+            }
 
-        printf("[pf_blockedcom] Module loaded\n");
+            printf("[pf_blockedcom] Module loaded\n");
+        }
         break;
 
     case MOD_UNLOAD:
