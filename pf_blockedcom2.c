@@ -32,9 +32,13 @@ pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *ul
         return (PF_PASS);
 
     /* Check if it's an IP packet */
-    if (mtod(m, struct ether_header *)->ether_type != htons(ETHERTYPE_IP))
+    if (m->m_pkthdr.len < sizeof(struct ip))
         return (PF_PASS);
 
+    /* Get IP header */
+    if (m->m_len < sizeof(struct ip) && (m = m_pullup(m, sizeof(struct ip))) == NULL)
+        return (PF_PASS);
+    
     ip_hdr = mtod(m, struct ip *);
     
     /* Check if it's TCP */
@@ -71,7 +75,7 @@ pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *ul
 
     /* Check for blocked.com in Host header */
     if (strstr(buf, "Host: blocked.com") != NULL ||
-        strstr(buf, "Host: blocked.com\r\n") != NULL) {
+        strstr(buf, "host: blocked.com") != NULL) {
         dropped_packets++;
         dropped_bytes += m->m_pkthdr.len;
         printf("[pf_blockedcom] Dropped HTTP packet to blocked.com (count=%lu, bytes=%lu)\n",
@@ -93,11 +97,11 @@ load(module_t mod, int cmd, void *arg)
     switch (cmd) {
     case MOD_LOAD:
         memset(&pha, 0, sizeof(pha));
-        pha.pha_func = pf_http_filter;
-        pha.pha_flags = PFIL_IN | PFIL_WAITOK;
-        pha.pha_name = "pf_blockedcom";
-        pha.pha_type = PFIL_TYPE_AF;
-        pha.pha_af = AF_INET;
+        pha.pa_func = pf_http_filter;
+        pha.pa_flags = PFIL_IN | PFIL_WAITOK;
+        pha.pa_name = "pf_blockedcom";
+        pha.pa_type = PFIL_TYPE_AF;
+        pha.pa_af = AF_INET;
         
         pfh_inet_hook = pfil_add_hook(&pha);
         if (pfh_inet_hook == NULL) {
