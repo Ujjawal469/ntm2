@@ -18,7 +18,7 @@ static unsigned long dropped_bytes = 0;
 
 static struct pfil_hook *pfh_inet_hook = NULL;
 
-/* Hook function with correct signature */
+/* Hook function with correct signature and return values */
 static int
 pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *inp)
 {
@@ -30,21 +30,21 @@ pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *in
     int tocopy;
 
     if (m == NULL) 
-        return (PF_PASS);
+        return (0);  /* 0 means pass the packet */
 
     /* Check if it's an IP packet */
     if (m->m_pkthdr.len < sizeof(struct ip))
-        return (PF_PASS);
+        return (0);  /* Pass */
 
     /* Get IP header */
     if (m->m_len < sizeof(struct ip) && (m = m_pullup(m, sizeof(struct ip))) == NULL)
-        return (PF_PASS);
+        return (0);  /* Pass */
     
     ip_hdr = mtod(m, struct ip *);
     
     /* Check if it's TCP */
     if (ip_hdr->ip_p != IPPROTO_TCP) 
-        return (PF_PASS);
+        return (0);  /* Pass */
 
     ip_hlen = ip_hdr->ip_hl << 2;
     
@@ -52,7 +52,7 @@ pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *in
     if (m->m_len < ip_hlen + sizeof(struct tcphdr)) {
         m = m_pullup(m, ip_hlen + sizeof(struct tcphdr));
         if (m == NULL)
-            return (PF_PASS);
+            return (0);  /* Pass */
         *mp = m;
         ip_hdr = mtod(m, struct ip *);
     }
@@ -61,13 +61,13 @@ pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *in
     
     /* Check if it's HTTP (port 80) */
     if (ntohs(tcp_hdr->th_dport) != 80)
-        return (PF_PASS);
+        return (0);  /* Pass */
 
     tcp_hlen = tcp_hdr->th_off << 2;
     payload_len = ntohs(ip_hdr->ip_len) - (ip_hlen + tcp_hlen);
     
     if (payload_len <= 0)
-        return (PF_PASS);
+        return (0);  /* Pass */
 
     /* Copy payload for inspection */
     tocopy = min(sizeof(buf) - 1, payload_len);
@@ -83,10 +83,10 @@ pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *in
                dropped_packets, dropped_bytes);
         m_freem(m);
         *mp = NULL;
-        return (PF_DROP);
+        return (-1);  /* -1 means drop the packet */
     }
 
-    return (PF_PASS);
+    return (0);  /* Pass */
 }
 
 static int
