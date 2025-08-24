@@ -16,16 +16,15 @@ static unsigned long dropped_bytes = 0;
 
 static pfil_hook_t pfh_inet_hook = NULL;
 
-/* Hook function */
+/* Hook function with correct signature */
 static int
 pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *ulp)
 {
     struct mbuf *m = *mp;
     struct ip *ip_hdr;
     struct tcphdr *tcp_hdr;
-    char *payload;
-    int ip_hlen, tcp_hlen, payload_len;
     char buf[128];
+    int ip_hlen, tcp_hlen, payload_len;
     int tocopy;
 
     if (m == NULL) 
@@ -92,18 +91,19 @@ static int
 load(module_t mod, int cmd, void *arg)
 {
     int error = 0;
-    struct pfil_hook_args pha;
 
     switch (cmd) {
     case MOD_LOAD:
-        memset(&pha, 0, sizeof(pha));
-        pha.pa_func = pf_http_filter;
-        pha.pa_flags = PFIL_IN | PFIL_WAITOK;
-        pha.pa_name = "pf_blockedcom";
-        pha.pa_type = PFIL_TYPE_AF;
-        pha.pa_af = AF_INET;
+        /* Use the new pfil API */
+        struct pfil_hook_args pha;
+        bzero(&pha, sizeof(pha));
         
-        pfh_inet_hook = pfil_add_hook(&pha);
+        pha.pa_version = PFIL_VERSION;
+        pha.pa_flags = PFIL_IN;
+        pha.pa_type = PFIL_TYPE_IP4;
+        pha.pa_func = pf_http_filter;
+        
+        pfh_inet_hook = pfil_add_hook_args(&pha);
         if (pfh_inet_hook == NULL) {
             printf("[pf_blockedcom] Failed to add hook\n");
             return (ENOMEM);
