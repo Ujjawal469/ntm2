@@ -102,7 +102,7 @@ load(module_t mod, int cmd, void *arg)
             /* Initialize the hook arguments structure */
             bzero(&pha, sizeof(pha));
             pha.pa_version = PFIL_VERSION;
-            pha.pa_flags = PFIL_IN;
+            pha.pa_flags = PFIL_IN | PFIL_OUT;
             pha.pa_type = PFIL_TYPE_IP4;
             pha.pa_func = (pfil_func_t)pf_http_filter;
             
@@ -138,3 +138,4 @@ static moduledata_t pf_blockedcom_mod = {
 };
 
 DECLARE_MODULE(pf_blockedcom, pf_blockedcom_mod, SI_SUB_DRIVERS, SI_ORDER_MIDDLE);
+
