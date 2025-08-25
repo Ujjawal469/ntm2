@@ -18,55 +18,36 @@ static unsigned long dropped_bytes = 0;
 
 static struct pfil_hook *pfh_inet_hook = NULL;
 
-/* Hook function with extensive debugging */
 static int
 pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *inp)
 {
     struct mbuf *m = *mp;
     struct ip *ip_hdr;
     struct tcphdr *tcp_hdr;
-    char buf[256];  // Increased buffer size
+    char buf[256]; // buffer size
     int ip_hlen, tcp_hlen, payload_len;
     int tocopy;
 
-    printf("[pf_blockedcom] DEBUG: Packet received, direction: %d\n", dir);
-
     if (m == NULL) {
-        printf("[pf_blockedcom] DEBUG: Null mbuf, passing\n");
         return (0);
     }
-
-    printf("[pf_blockedcom] DEBUG: Packet length: %d\n", m->m_pkthdr.len);
-
-    /* Check if it's an IP packet */
-    if (m->m_pkthdr.len < sizeof(struct ip)) {
-        printf("[pf_blockedcom] DEBUG: Packet too short for IP, passing\n");
+    if (m->m_pkthdr.len < sizeof(struct ip)){
         return (0);
     }
-
-    /* Get IP header */
     if (m->m_len < sizeof(struct ip) && (m = m_pullup(m, sizeof(struct ip))) == NULL) {
-        printf("[pf_blockedcom] DEBUG: Failed to pull up IP header, passing\n");
         return (0);
     }
     
     ip_hdr = mtod(m, struct ip *);
-    printf("[pf_blockedcom] DEBUG: IP protocol: %d\n", ip_hdr->ip_p);
-    
-    /* Check if it's TCP */
     if (ip_hdr->ip_p != IPPROTO_TCP) {
-        printf("[pf_blockedcom] DEBUG: Not TCP, passing\n");
         return (0);
     }
 
     ip_hlen = ip_hdr->ip_hl << 2;
-    printf("[pf_blockedcom] DEBUG: IP header length: %d\n", ip_hlen);
-    
-    /* Ensure we have enough data for TCP header */
+
     if (m->m_len < ip_hlen + sizeof(struct tcphdr)) {
         m = m_pullup(m, ip_hlen + sizeof(struct tcphdr));
         if (m == NULL) {
-            printf("[pf_blockedcom] DEBUG: Failed to pull up TCP header, passing\n");
             return (0);
         }
         *mp = m;
@@ -74,33 +55,22 @@ pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *in
     }
 
     tcp_hdr = (struct tcphdr *)((caddr_t)ip_hdr + ip_hlen);
-    printf("[pf_blockedcom] DEBUG: TCP dest port: %d\n", ntohs(tcp_hdr->th_dport));
-    
-    /* Check if it's HTTP (port 80) */
     if (ntohs(tcp_hdr->th_dport) != 80) {
-        printf("[pf_blockedcom] DEBUG: Not HTTP (port 80), passing\n");
         return (0);
     }
 
     tcp_hlen = tcp_hdr->th_off << 2;
-    printf("[pf_blockedcom] DEBUG: TCP header length: %d\n", tcp_hlen);
     
     payload_len = ntohs(ip_hdr->ip_len) - (ip_hlen + tcp_hlen);
-    printf("[pf_blockedcom] DEBUG: Payload length: %d\n", payload_len);
     
     if (payload_len <= 0) {
-        printf("[pf_blockedcom] DEBUG: No payload, passing\n");
         return (0);
     }
 
-    /* Copy payload for inspection */
     tocopy = min(sizeof(buf) - 1, payload_len);
     m_copydata(m, ip_hlen + tcp_hlen, tocopy, buf);
     buf[tocopy] = '\0';
-    
-    printf("[pf_blockedcom] DEBUG: Payload (first %d bytes): %s\n", tocopy, buf);
 
-    /* Check for blocked.com in Host header */
     if (strstr(buf, "Host: blocked.com") != NULL ||
         strstr(buf, "host: blocked.com") != NULL) {
         printf("[pf_blockedcom] DEBUG: Found blocked.com in Host header\n");
@@ -110,7 +80,7 @@ pf_http_filter(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir, void *in
                dropped_packets, dropped_bytes);
         m_freem(m);
         *mp = NULL;
-        return (-1);
+        return (-1); // drop the packet
     } else {
         printf("[pf_blockedcom] DEBUG: blocked.com not found in Host header, passing\n");
     }
@@ -138,11 +108,8 @@ load(module_t mod, int cmd, void *arg)
             
             pfh_inet_hook = pfil_add_hook(&pha);
             if (pfh_inet_hook == NULL) {
-                printf("[pf_blockedcom] ERROR: Failed to add hook\n");
                 return (ENOMEM);
             }
-
-            printf("[pf_blockedcom] Module loaded successfully\n");
         }
         break;
 
@@ -168,3 +135,4 @@ static moduledata_t pf_blockedcom_mod = {
 };
 
 DECLARE_MODULE(pf_blockedcom, pf_blockedcom_mod, SI_SUB_DRIVERS, SI_ORDER_MIDDLE);
+
